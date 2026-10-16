@@ -4,8 +4,6 @@ A kitty kitten that searches your shell history and your Claude Code sessions to
 
 ![histsearch searching for "rebase" across shell history, Claude messages and sessions](docs/screenshot.png)
 
-The screenshot was rendered from made-up data by [`docs/demo.py`](docs/demo.py), which runs the real `hs.py` against invented history.
-
 ## What it searches
 
 | Tag | Source | Enter does |
@@ -61,11 +59,3 @@ For atuin, put this in `.zshrc`. The `CLAUDECODE` check keeps commands that Clau
 | `hs.py` | plain `python3`, called by fzf | builds the index, prints rows and previews, switches modes |
 
 Transcripts are indexed into one TSV per session under `~/.cache/histsearch/cc/`. A session is only re-read when its transcript's size or mtime changes, so after the first build an open takes well under 100 ms. The last search lives in `~/.local/state/histsearch/`. atuin's database is opened read-only.
-
-## Screenshot
-
-```sh
-python3 docs/demo.py
-```
-
-That writes `docs/mockup.html`. It expects `term.ttf`, a Nerd Font, next to it. Open it in a headless browser at 2× scale and save the result as `docs/screenshot.png`.
