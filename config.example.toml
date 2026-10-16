@@ -1,0 +1,5 @@
+key = "ctrl+f"
+
+passthrough = ["vim", "nvim", "vi", "view", "vimdiff", "gvim", "emacs", "emacsclient"]
+
+herdr = true

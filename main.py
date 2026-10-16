@@ -2,12 +2,27 @@ import json
 import os
 import shutil
 import subprocess
+import tomllib
 
 from kittens.tui.handler import result_handler
 from kitty.constants import config_dir
 
-EDITORS = {'vim', 'nvim', 'vi', 'view', 'vimdiff', 'gvim', 'emacs', 'emacsclient'}
 UI = os.path.join(config_dir, 'kittens', 'histsearch', 'ui.py')
+CONFIG = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'), 'histsearch', 'config.toml')
+DEFAULTS = {
+    'key': 'ctrl+f',
+    'passthrough': ['vim', 'nvim', 'vi', 'view', 'vimdiff', 'gvim', 'emacs', 'emacsclient'],
+    'herdr': True,
+}
+
+
+def load_config():
+    try:
+        with open(CONFIG, 'rb') as fh:
+            user = tomllib.load(fh)
+    except (OSError, tomllib.TOMLDecodeError):
+        user = {}
+    return {k: user.get(k, v) for k, v in DEFAULTS.items()}
 
 
 def names(procs):
@@ -42,13 +57,14 @@ def handle_result(args, answer, target_window_id, boss):
     w = boss.window_id_map.get(target_window_id)
     if w is None:
         return
+    cfg = load_config()
     fg = names(w.child.foreground_processes)
     pane, cwd = '', w.cwd_of_child or ''
-    if 'herdr' in fg:
+    if cfg['herdr'] and 'herdr' in fg:
         focus = herdr_focus()
         if focus:
             pane, fg, cwd = focus[0], focus[1], focus[2] or cwd
-    if fg & EDITORS:
-        w.send_key('ctrl+f')
+    if fg & set(cfg['passthrough']):
+        w.send_key(cfg['key'])
         return
     boss.run_kitten_with_metadata(UI, args=[cwd, pane], window=w)

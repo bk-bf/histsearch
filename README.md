@@ -28,7 +28,21 @@ Rows are newest first. Search words match exactly, not fuzzily, so prose doesn't
 
 Each new open restores your last query, mode and cursor row.
 
-Ctrl+F still goes through to vim, nvim and emacs. Inside herdr it asks herdr what the focused pane is running, types into that pane, and resumes sessions in a new herdr tab.
+## Configuration
+
+`~/.config/histsearch/config.toml`, read on every press. Every key is optional; these are the defaults ([`config.example.toml`](config.example.toml)):
+
+```toml
+key = "ctrl+f"
+
+passthrough = ["vim", "nvim", "vi", "view", "vimdiff", "gvim", "emacs", "emacsclient"]
+
+herdr = true
+```
+
+- `key` opens the popup. After changing it, rerun `./install.sh` and reload kitty's config (Ctrl+Shift+F5).
+- `passthrough` lists programs that get the key instead of the popup. Use `[]` to always open the popup.
+- `herdr` makes the popup look inside herdr panes: it checks the focused pane against `passthrough`, types commands into that pane, and resumes sessions in a new herdr tab. With `false`, herdr is treated like any other program.
 
 ## Install
 
@@ -38,11 +52,7 @@ Requires kitty, fzf (tested with 0.74), Python 3, and atuin hooked into zsh. Cla
 ./install.sh
 ```
 
-That links this checkout to `~/.config/kitty/kittens/histsearch`. Then add the key to `kitty.conf`:
-
-```
-map ctrl+f kitten kittens/histsearch/main.py
-```
+That links this checkout to `~/.config/kitty/kittens/histsearch` and adds the key binding to `kitty.conf`, or updates the existing one.
 
 For atuin, put this in `.zshrc`. The `CLAUDECODE` check keeps commands that Claude Code's agents run out of your history:
 
