@@ -380,7 +380,7 @@ def filter_line(st, synced_at):
     on = 'all' if st['repo'] == 'all' else f'⌂ {short(st["repo"])}'
     if on not in repos:
         repos.append(on)
-    parts = [group('ctrl-d', repos, on), group('ctrl-t', KINDS, st['kind'])]
+    parts = [group('ctrl-t', KINDS, st['kind'])]
     if st['closed']:
         parts.append(f'{ACCENT}closed too{RESET}')
     if not available():
@@ -388,7 +388,7 @@ def filter_line(st, synced_at):
     elif synced_at:
         ago = int(time.time() - synced_at)
         parts.append(f'{DIM}synced {ago // 60}m ago{RESET}' if ago >= 60 else f'{DIM}synced {ago}s ago{RESET}')
-    return '   '.join(parts)
+    return group('ctrl-d', repos, on), '   '.join(parts)
 
 
 def url(key, kind):

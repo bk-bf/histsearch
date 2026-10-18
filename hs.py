@@ -251,12 +251,15 @@ def gh_list():
     st = ghmode.load_state()
     try:
         at, rows = ghmode.rows(st)
-        status = ghmode.filter_line(st, at)
+        repos, status = ghmode.filter_line(st, at)
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as e:
-        rows, status = [], f'{ghmode.filter_line(st, 0)}   {RED}{e}{RESET}'
-    tw = max(10, list_width('gh') - 41)
+        repos, status = ghmode.filter_line(st, 0)
+        rows, status = [], f'{status}   {RED}{e}{RESET}'
+    width = list_width('gh')
+    tw = max(10, width - 41)
     now = time.time()
-    print(f'gh\t\t\t\t{status}')
+    print(f'gh\t\t\t\t{fit(repos, width).rstrip()}')
+    print(f'gh\t\t\t\t{fit(status, width).rstrip()}')
     print(f'gh\t\t\t\t  {gh_column("type", 8, st)} {gh_column("id", 8, st)} {gh_column("title", tw, st)} '
           f'{gh_column("repo", 14, st, True)} {gh_column("age", 5, st, True)}')
     for r in rows:
@@ -376,7 +379,7 @@ def footer_for(mode):
 
 
 def header_lines(mode):
-    return 2 if mode == 'gh' else 0
+    return 3 if mode == 'gh' else 0
 
 
 def header_for(mode):
