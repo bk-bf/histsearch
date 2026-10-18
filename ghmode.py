@@ -39,7 +39,7 @@ LINK = re.compile(r'\[([^\]]+)\]\((?:[^)\s]+)\)')
 HTML_COMMENT = re.compile(r'<!--.*?-->', re.S)
 SUMMARY = re.compile(r'<summary>(.*?)</summary>', re.I)
 HTML_TAG = re.compile(r'</?[a-zA-Z][^>]*>')
-ISSUE_REF = re.compile(r'(?<![\w/])#(\d+)\b')
+ISSUE_REF = re.compile(r'(?<![\w/.-])((?:[\w.-]+/)?[\w.-]+)?#(\d+)\b')
 
 
 def path(*parts):
@@ -627,8 +627,16 @@ def issue_entry(repo, num):
 def linked(key, kind):
     if kind == 'commit':
         repo, sha = key.split('@', 1)
-        refs = dict.fromkeys(ISSUE_REF.findall(commit_detail(key)['message']))
-        return [issue_entry(repo, n) for n in refs]
+        known, out = known_repos(), []
+        for prefix, num in dict.fromkeys(ISSUE_REF.findall(commit_detail(key)['message'])):
+            target = prefix if '/' in prefix else known.get(prefix.lower()) if prefix else repo
+            if not target:
+                continue
+            try:
+                out.append(issue_entry(target, num))
+            except RuntimeError:
+                continue
+        return list(dict.fromkeys(out))
     repo, num = key.split('#', 1)
     events = json.loads(run_gh(['api', f'repos/{repo}/issues/{num}/timeline?per_page=100']))
     out, seen = [], set()
