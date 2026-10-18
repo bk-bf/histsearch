@@ -28,6 +28,8 @@ EDITOR_NOISE = re.compile(r'^\s*(<|Stop hook feedback|\[Request interrupted|This
 INDEX_VERSION = 3
 
 DIM, RESET, BOLD, RED, ACCENT = '\x1b[2m', '\x1b[0m', '\x1b[1m', '\x1b[31m', '\x1b[35m'
+BLUE, CYAN, GREEN = '\x1b[34m', '\x1b[36m', '\x1b[32m'
+SPEAKERS = {'you': ACCENT + BOLD, 'claude': BLUE, 'bash': CYAN, 'title': DIM}
 
 
 def flat(s):
@@ -347,14 +349,18 @@ def cmd_preview(src, key, cwd, meta):
         return
     print(f'{ACCENT}{BOLD}{m["title"] or "untitled"}{RESET}')
     ts = float(rows[idx][0]) if rows else 0
-    print(f'{DIM}{tilde(m["cwd"])} · {key[:8]} · {age(ts, time.time())} ago{RESET}\n')
-    labels = {'you': f'{ACCENT}{BOLD}you   {RESET}', 'claude': f'{DIM}claude{RESET}',
-              'bash': f'{DIM}bash  {RESET}', 'title': f'{DIM}title {RESET}'}
+    ago = age(ts, time.time())
+    print(f'{DIM}{tilde(m["cwd"])} · {key[:8]} · {ago if ago == "now" else ago + " ago"}{RESET}\n')
     lo, hi = max(0, idx - 3), min(len(rows), idx + 5)
     for i in range(lo, hi):
         _, k, text = rows[i]
-        mark = '\x1b[7m' if i == idx else ''
-        print(f'{labels[k]} {mark}{text}{RESET}\n')
+        bar, weight = (f'{ACCENT}▌{RESET}', BOLD) if i == idx else (' ', '')
+        if k == 'bash':
+            body = f'{DIM}${RESET} {GREEN}{weight}{text}'
+        else:
+            text = re.sub(r'\*\*(.+?)\*\*', lambda b: f'{BOLD}{b.group(1)}{RESET}{weight}', text)
+            body = weight + ghmode.styled([text])[0].replace(RESET, RESET + weight)
+        print(f'{bar}{SPEAKERS[k]}{k:<6}{RESET} {body}{RESET}\n')
 
 
 def session_preview(sid, m, rows):
