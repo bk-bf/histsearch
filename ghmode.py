@@ -200,10 +200,17 @@ def known_repos():
     return {r.split('/')[1].lower(): r for r in (data or {}).get('repos', [])}
 
 
+def ignored(root, p):
+    return subprocess.run(['git', '-C', root, 'check-ignore', '-q', p], capture_output=True, timeout=5).returncode == 0
+
+
 def resolve(p, known, roots):
     p = os.path.expanduser(p)
     if os.path.exists(p) or os.path.exists(os.path.dirname(p)):
-        root = git_root(os.path.realpath(p))
+        real = os.path.realpath(p)
+        root = git_root(real)
+        if root and real != root and ignored(root, real):
+            return None
         if root:
             repo = remote_of(root)
             if repo:
@@ -217,9 +224,12 @@ def resolve(p, known, roots):
 
 
 def transcript_paths(transcript):
-    found = []
+    found, cwd = [], ''
     with open(transcript, encoding='utf-8', errors='replace') as fh:
         for line in fh:
+            m = re.search(r'"cwd":"([^"]+)"', line)
+            if m:
+                cwd = m.group(1)
             if '"tool_use"' not in line:
                 continue
             try:
@@ -235,7 +245,7 @@ def transcript_paths(transcript):
                         found.append(inp[k])
                 if isinstance(inp.get('command'), str):
                     found += PATH_IN_TEXT.findall(inp['command'])
-    return found
+    return found, cwd
 
 
 def session_ids(pids):
@@ -254,12 +264,12 @@ def session_repos(pids, cwd):
             st = os.stat(transcript)
             stamp = f'{st.st_mtime_ns} {st.st_size}'
             cache = read_json(path('sessions', f'{sid}.json'))
-            if cache and cache.get('stamp') == stamp:
-                found = cache['paths']
+            if cache and cache.get('stamp') == stamp and 'cwd' in cache:
+                found, last_cwd = cache['paths'], cache['cwd']
             else:
-                found = transcript_paths(transcript)
-                write_json(path('sessions', f'{sid}.json'), {'stamp': stamp, 'paths': found})
-            for p in reversed(found):
+                found, last_cwd = transcript_paths(transcript)
+                write_json(path('sessions', f'{sid}.json'), {'stamp': stamp, 'paths': found, 'cwd': last_cwd})
+            for p in ([last_cwd] if last_cwd else []) + list(reversed(found)):
                 repo = resolve(p, known, roots)
                 if repo and repo not in repos:
                     repos.append(repo)
