@@ -33,15 +33,23 @@ Each new open restores your last query, mode and cursor row.
 
 | Key | |
 |---|---|
-| Enter | read it in the popup: body and comments for an issue or pull request, message and diff for a commit |
+| Enter | read it in the popup (see below) |
 | Ctrl+O | open it in your default browser (`xdg-open`) |
 | Alt+Enter | copy its URL |
 | Ctrl+D | step through the repos you are working in, then all |
-| Ctrl+T | all → issues → pull requests → commits |
+| Ctrl+T | all (issues, pull requests and commits) → issues → pull requests → commits |
 | Ctrl+S / Alt+S | next sort column (age, type, id, title, repo) / flip the direction |
 | Ctrl+X | include closed issues and pull requests |
 
-In the viewer: Tab switches pages, the arrows, PgUp/PgDn, Space, `g` and `G` scroll, Ctrl+O and Alt+Enter work as in the list, Esc or `q` goes back to the list.
+The viewer has pages, switched with Tab:
+
+| Post | Pages |
+|---|---|
+| issue | body, comments, linked |
+| pull request | body, comments, commits, diff, linked |
+| commit | message, diff, linked |
+
+"linked" lists the commits that reference an issue or pull request and the issues and pull requests that mention it, from GitHub's timeline; for a commit, the `#123` references in its message. On "commits" and "linked", the arrows move a cursor and Enter opens that entry in a viewer of its own; Esc returns to the one before, so an issue leads to a commit and on to its diff. Ctrl+O and Alt+Enter act on the selected entry there, and on the post itself elsewhere. The arrows, PgUp/PgDn, Space, `g` and `G` scroll text pages; Esc or `q` goes back.
 
 "The repos you are working in" come from the focused pane. If it runs Claude Code, they are the repos that session has read, edited or run commands in, most recent first, so a session started in your home directory still finds them. A path that does not exist locally, such as one on a server reached over ssh, is matched by name against your GitHub repos. Without a Claude session, it is the repo of the current directory. The popup opens on the first of them.
 

@@ -37,6 +37,9 @@ GITHUB_URL = re.compile(r'github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?/?$')
 PATH_IN_TEXT = re.compile(r'(?<![\w.:/-])(~?/[\w.@+-]+(?:/[\w.@+-]+)*)')
 LINK = re.compile(r'\[([^\]]+)\]\((?:[^)\s]+)\)')
 HTML_COMMENT = re.compile(r'<!--.*?-->', re.S)
+SUMMARY = re.compile(r'<summary>(.*?)</summary>', re.I)
+HTML_TAG = re.compile(r'</?[a-zA-Z][^>]*>')
+ISSUE_REF = re.compile(r'(?<![\w/])#(\d+)\b')
 
 
 def path(*parts):
@@ -353,14 +356,14 @@ def item_row(it):
 
 
 def rows(st):
+    out = commit_rows(st) if st['kind'] in ('all', 'commit') else []
     if st['kind'] == 'commit':
-        out = commit_rows(st)
         at, _ = cached_items('open')
     else:
         at, its = items(st['closed'])
-        out = [item_row(i) for i in its
-               if (st['repo'] == 'all' or i['repo'] == st['repo'])
-               and (st['kind'] == 'all' or (st['kind'] == 'pr') == i['pr'])]
+        out += [item_row(i) for i in its
+                if (st['repo'] == 'all' or i['repo'] == st['repo'])
+                and (st['kind'] == 'all' or (st['kind'] == 'pr') == i['pr'])]
     keys = {'age': lambda r: r['updated'], 'type': lambda r: (r['type'], -r['updated']),
             'id': lambda r: (r['repo'], r['num']), 'title': lambda r: r['title'].lower(),
             'repo': lambda r: (r['repo'].lower(), -r['updated'])}
@@ -420,11 +423,11 @@ def detail(key, kind):
     it = find_item(key)
     p = path('detail', f'{repo.replace("/", "_")}_{num}.json')
     cached = read_json(p)
-    if cached and it and cached.get('_updated') == it['updated']:
+    if cached and it and cached.get('_updated') == it['updated'] and (kind != 'pr' or 'commits' in cached):
         return cached
     fields = 'title,body,labels,author,createdAt,updatedAt,state,comments,url'
     if kind == 'pr':
-        fields += ',isDraft,headRefName,baseRefName,additions,deletions,changedFiles,statusCheckRollup'
+        fields += ',isDraft,headRefName,baseRefName,additions,deletions,changedFiles,statusCheckRollup,commits'
     data = json.loads(run_gh([kind if kind == 'pr' else 'issue', 'view', num, '-R', repo, '--json', fields]))
     data['_updated'] = epoch(data.get('updatedAt'))
     write_json(p, data)
@@ -482,7 +485,7 @@ def markdown(text, width):
     out, fence = [], False
     for raw in text.split('\n'):
         if not fence:
-            raw = LINK.sub(r'\1', raw)
+            raw = HTML_TAG.sub('', SUMMARY.sub(r'▸ \1', LINK.sub(r'\1', raw)))
         if raw.lstrip().startswith('```'):
             fence = not fence
             continue
@@ -596,6 +599,59 @@ def preview(key, kind, width):
             print(l)
 
 
+def entry(kind, kind_label, ident, title, repo):
+    c = COLOURS.get(kind_label, '')
+    return f'{c}{ICONS[kind]} {kind_label:<8}{RESET} {DIM}{ident:<8}{RESET} {title}  {DIM}{short(repo)}{RESET}'
+
+
+def commit_subject(repo, sha):
+    root = load_state()['roots'].get(repo)
+    if root and os.path.isdir(root):
+        out = subprocess.run(['git', '-C', root, 'log', '-1', '--format=%s', sha], capture_output=True, text=True, timeout=5)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    return commit_detail(f'{repo}@{sha}')['message'].split('\n', 1)[0]
+
+
+def issue_entry(repo, num):
+    it = find_item(f'{repo}#{num}')
+    if it:
+        return entry('pr' if it['pr'] else 'issue', type_of(it), f'#{num}', it['title'], repo), f'{repo}#{num}', 'pr' if it['pr'] else 'issue'
+    raw = json.loads(run_gh(['api', f'repos/{repo}/issues/{num}']))
+    kind = 'pr' if raw.get('pull_request') else 'issue'
+    labels = [l['name'] for l in raw.get('labels') or []]
+    label = 'pr' if kind == 'pr' else next((l for l in labels if l in COLOURS), 'issue')
+    return entry(kind, label, f'#{num}', raw['title'], repo), f'{repo}#{num}', kind
+
+
+def linked(key, kind):
+    if kind == 'commit':
+        repo, sha = key.split('@', 1)
+        refs = dict.fromkeys(ISSUE_REF.findall(commit_detail(key)['message']))
+        return [issue_entry(repo, n) for n in refs]
+    repo, num = key.split('#', 1)
+    events = json.loads(run_gh(['api', f'repos/{repo}/issues/{num}/timeline?per_page=100']))
+    out, seen = [], set()
+    for e in events:
+        if e.get('commit_id') and e.get('event') in ('referenced', 'closed', 'committed'):
+            m = re.search(r'/repos/([^/]+/[^/]+)/commits/', e.get('commit_url') or '')
+            r, sha = (m.group(1) if m else repo), e['commit_id']
+            if f'{r}@{sha}' not in seen:
+                seen.add(f'{r}@{sha}')
+                out.append((entry('commit', 'commit', sha[:7], commit_subject(r, sha), r), f'{r}@{sha}', 'commit'))
+        elif e.get('event') == 'cross-referenced':
+            src = (e.get('source') or {}).get('issue') or {}
+            r = (src.get('repository') or {}).get('full_name') or repo
+            k = 'pr' if src.get('pull_request') else 'issue'
+            labels = [l['name'] for l in src.get('labels') or []]
+            label = 'pr' if k == 'pr' else next((l for l in labels if l in COLOURS), 'issue')
+            ref = f'{r}#{src.get("number")}'
+            if src.get('number') and ref not in seen and ref != key:
+                seen.add(ref)
+                out.append((entry(k, label, f'#{src["number"]}', src.get('title', ''), r), ref, k))
+    return out
+
+
 def pages(key, kind):
     d = detail(key, kind)
     head = head_lines(d, key, kind)
@@ -616,10 +672,19 @@ def pages(key, kind):
                     out.append(f'{colour}{l}{RESET}')
                 out.append('')
             return out
-        return head, [('message', message), ('diff', diff)]
+        return head, [('message', 'text', message), ('diff', 'text', diff), ('linked', 'list', lambda: linked(key, kind))]
+    repo, num = key.split('#', 1)
     comments = d.get('comments') or []
-    return head, [('body', lambda width: markdown(d.get('body') or '', width) or [f'{DIM}no description{RESET}']),
-                  (f'comments {len(comments)}', lambda width: comment_lines(comments, width))]
+    tabs = [('body', 'text', lambda width: markdown(d.get('body') or '', width) or [f'{DIM}no description{RESET}']),
+            (f'comments {len(comments)}', 'text', lambda width: comment_lines(comments, width))]
+    if kind == 'pr':
+        commits = d.get('commits') or []
+        tabs.append((f'commits {len(commits)}', 'list', lambda: [
+            (entry('commit', 'commit', c['oid'][:7], c.get('messageHeadline', ''), repo), f'{repo}@{c["oid"]}', 'commit')
+            for c in commits]))
+        tabs.append(('diff', 'text', lambda width: run_gh(['pr', 'diff', num, '-R', repo, '--color', 'always']).splitlines()))
+    tabs.append(('linked', 'list', lambda: linked(key, kind)))
+    return head, tabs
 
 
 def read_key(fd):
@@ -632,69 +697,88 @@ def read_key(fd):
 KEYMAP = {b'\x1b[A': 'up', b'\x1bOA': 'up', b'k': 'up', b'\x1b[B': 'down', b'\x1bOB': 'down', b'j': 'down',
           b'\x1b[5~': 'pgup', b'\x1b[6~': 'pgdn', b' ': 'pgdn', b'\x1b[H': 'home', b'\x1b[1~': 'home',
           b'g': 'home', b'\x1b[F': 'end', b'\x1b[4~': 'end', b'G': 'end', b'\t': 'tab', b'\x1b[Z': 'btab',
-          b'\x1b': 'back', b'q': 'back', b'\x03': 'back', b'\x0f': 'browse', b'\x1b\r': 'copy', b'\x1b\n': 'copy'}
+          b'\x1b': 'back', b'q': 'back', b'\x03': 'back', b'\x0f': 'browse', b'\x1b\r': 'copy', b'\x1b\n': 'copy',
+          b'\r': 'enter', b'\n': 'enter'}
 
 
 def view(key, kind):
     import termios
     import tty
-    try:
-        head, tabs = pages(key, kind)
-    except (RuntimeError, subprocess.SubprocessError, OSError, ValueError) as e:
-        print(e)
-        time.sleep(2)
-        return
     fd = os.open('/dev/tty', os.O_RDWR)
     saved = termios.tcgetattr(fd)
-    out = lambda s: os.write(fd, s.encode())
-    page, top, note, cache = 0, 0, '', {}
     try:
         tty.setraw(fd)
-        out('\x1b[?1049h\x1b[?25l')
-        while True:
-            cols, rows = os.get_terminal_size(fd)
-            width = min(cols - 2, 110)
-            if (page, width) not in cache:
-                cache[(page, width)] = tabs[page][1](width)
-            body = cache[(page, width)]
-            tab_line = '   '.join(f'{ACCENT}{BOLD}{n}{RESET}' if i == page else f'{DIM}{n}{RESET}'
-                                  for i, (n, _) in enumerate(tabs))
-            top_lines = head + ['', tab_line, '']
-            space = max(1, rows - len(top_lines) - 1)
-            top = max(0, min(top, len(body) - space))
-            pct = 100 if len(body) <= space else round(100 * min(len(body), top + space) / len(body))
-            footer = (f'{BOLD}esc{RESET}{DIM} back   {RESET}{BOLD}tab{RESET}{DIM} {" / ".join(n.split()[0] for n, _ in tabs)}   '
-                      f'{RESET}{BOLD}↑↓ pgup pgdn{RESET}{DIM} scroll   {RESET}{BOLD}ctrl-o{RESET}{DIM} open in browser   '
-                      f'{RESET}{BOLD}alt-↵{RESET}{DIM} copy url   {pct}%  {RESET}{ACCENT}{note}{RESET}')
-            screen = top_lines + body[top:top + space]
-            screen += [''] * (rows - 1 - len(screen))
-            out('\x1b[H' + ''.join(f'\x1b[2K {l}{RESET}\r\n' for l in screen[:rows - 1]) + f'\x1b[2K {footer}')
-            k = KEYMAP.get(read_key(fd))
-            note = ''
-            if k == 'back':
-                return
-            if k == 'up':
-                top -= 1
-            elif k == 'down':
-                top += 1
-            elif k == 'pgup':
-                top -= space
-            elif k == 'pgdn':
-                top += space
-            elif k == 'home':
-                top = 0
-            elif k == 'end':
-                top = len(body)
-            elif k in ('tab', 'btab'):
-                page, top = (page + (1 if k == 'tab' else -1)) % len(tabs), 0
-            elif k == 'browse':
-                browse(key, kind)
-                note = 'opened'
-            elif k == 'copy':
-                out('\x1b]52;c;' + base64.b64encode(url(key, kind).encode()).decode() + '\x07')
-                note = 'copied'
+        os.write(fd, b'\x1b[?1049h\x1b[?25l')
+        viewer(fd, key, kind)
     finally:
-        out('\x1b[?25h\x1b[?1049l')
+        os.write(fd, b'\x1b[?25h\x1b[?1049l')
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
         os.close(fd)
 
+
+def viewer(fd, key, kind):
+    out = lambda s: os.write(fd, s.encode())
+    try:
+        head, tabs = pages(key, kind)
+    except (RuntimeError, subprocess.SubprocessError, OSError, ValueError) as e:
+        out(f'\x1b[H\x1b[2J {e}\r\n {DIM}any key{RESET}')
+        read_key(fd)
+        return
+    page, top, note, cache, cursor = 0, 0, '', {}, {}
+    while True:
+        cols, rows = os.get_terminal_size(fd)
+        width = min(cols - 2, 110)
+        name, shape, produce = tabs[page]
+        error = ''
+        if (page, width) not in cache:
+            try:
+                cache[(page, width)] = produce() if shape == 'list' else produce(width)
+            except (RuntimeError, subprocess.SubprocessError, OSError, ValueError) as e:
+                cache[(page, width)], error = [], str(e)
+        content = cache[(page, width)]
+        tab_line = '   '.join(f'{ACCENT}{BOLD}{n}{RESET}' if i == page else f'{DIM}{n}{RESET}'
+                              for i, (n, _, _) in enumerate(tabs))
+        top_lines = head + ['', tab_line, '']
+        space = max(1, rows - len(top_lines) - 1)
+        if shape == 'list':
+            sel = cursor.get(page, 0)
+            sel = max(0, min(sel, len(content) - 1))
+            cursor[page] = sel
+            top = max(0, min(top, sel), sel - space + 1)
+            body = [(f'\x1b[7m{label}{RESET}' if i == sel else label) for i, (label, _, _) in enumerate(content)]
+            body = body or [f'{DIM}{error or "nothing linked"}{RESET}']
+        else:
+            body = content or [f'{DIM}{error or "empty"}{RESET}']
+            top = max(0, min(top, len(body) - space))
+        pct = 100 if len(body) <= space else round(100 * min(len(body), top + space) / len(body))
+        keys = [('esc', 'back'), ('tab', 'page')] + ([('↵', 'open')] if shape == 'list' else []) + [
+            ('↑↓ pgup pgdn', 'scroll' if shape == 'text' else 'move'), ('ctrl-o', 'open in browser'), ('alt-↵', 'copy url')]
+        footer = '   '.join(f'{BOLD}{k}{RESET}{DIM} {v}{RESET}' for k, v in keys) + f'{DIM}   {pct}%{RESET}  {ACCENT}{note}{RESET}'
+        screen = top_lines + body[top:top + space]
+        screen += [''] * (rows - 1 - len(screen))
+        out('\x1b[H' + ''.join(f'\x1b[2K {l}{RESET}\r\n' for l in screen[:rows - 1]) + f'\x1b[2K {footer}')
+        k = KEYMAP.get(read_key(fd))
+        note = ''
+        if k == 'back':
+            return
+        step = {'up': -1, 'down': 1, 'pgup': -space, 'pgdn': space}.get(k)
+        if step and shape == 'list':
+            cursor[page] = cursor.get(page, 0) + step
+        elif step:
+            top += step
+        elif k == 'home':
+            top, cursor[page] = 0, 0
+        elif k == 'end':
+            top, cursor[page] = len(body), len(content)
+        elif k in ('tab', 'btab'):
+            page, top = (page + (1 if k == 'tab' else -1)) % len(tabs), 0
+        elif k == 'enter' and shape == 'list' and content:
+            _, sub_key, sub_kind = content[cursor[page]]
+            viewer(fd, sub_key, sub_kind)
+        elif k in ('browse', 'copy'):
+            target = content[cursor[page]][1:] if shape == 'list' and content else (key, kind)
+            if k == 'browse':
+                browse(*target)
+            else:
+                out('\x1b]52;c;' + base64.b64encode(url(*target).encode()).decode() + '\x07')
+            note = 'opened' if k == 'browse' else 'copied'
