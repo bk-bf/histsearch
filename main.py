@@ -36,6 +36,10 @@ def names(procs):
     return out
 
 
+def pids(procs):
+    return ','.join(str(p['pid']) for p in procs if p.get('pid'))
+
+
 def herdr_focus():
     h = shutil.which('herdr') or os.path.expanduser('~/.local/bin/herdr')
     try:
@@ -45,7 +49,7 @@ def herdr_focus():
         return None
     procs = info.get('foreground_processes') or []
     cwd = next((p.get('cwd') for p in procs if p.get('cwd')), '')
-    return info.get('pane_id', ''), names(procs), cwd
+    return info.get('pane_id', ''), names(procs), cwd, pids(procs)
 
 
 def main(args):
@@ -58,13 +62,14 @@ def handle_result(args, answer, target_window_id, boss):
     if w is None:
         return
     cfg = load_config()
-    fg = names(w.child.foreground_processes)
+    procs = w.child.foreground_processes
+    fg, pid_list = names(procs), pids(procs)
     pane, cwd = '', w.cwd_of_child or ''
     if cfg['herdr'] and 'herdr' in fg:
         focus = herdr_focus()
         if focus:
-            pane, fg, cwd = focus[0], focus[1], focus[2] or cwd
+            pane, fg, cwd, pid_list = focus[0], focus[1], focus[2] or cwd, focus[3]
     if fg & set(cfg['passthrough']):
         w.send_key(cfg['key'])
         return
-    boss.run_kitten_with_metadata(UI, args=[cwd, pane], window=w)
+    boss.run_kitten_with_metadata(UI, args=[cwd, pane, pid_list], window=w)

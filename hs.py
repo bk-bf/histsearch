@@ -5,8 +5,12 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ghmode
 
 HOME = os.path.expanduser('~')
 ATUIN_DB = os.path.join(HOME, '.local/share/atuin/history.db')
@@ -14,8 +18,10 @@ PROJECTS = os.path.join(HOME, '.claude/projects')
 STATE = os.path.join(os.environ.get('XDG_STATE_HOME', os.path.join(HOME, '.local/state')), 'histsearch', 'last.json')
 CACHE = os.path.join(os.environ.get('XDG_CACHE_HOME', os.path.join(HOME, '.cache')), 'histsearch', 'cc')
 TEXT_CAP = 400
-MODES = ('all', 'sh', 'cc', 'ses')
-ICONS = {'all': '', 'sh': '\ue957 ', 'cc': '\ueac7 ', 'ses': '\uec82 '}
+MODES = ('all', 'sh', 'cc', 'ses', 'gh')
+ICONS = {'all': '', 'sh': '\ue957 ', 'cc': '\ueac7 ', 'ses': '\uec82 ', 'gh': '\uf408 '}
+FOOTERS = {'gh': '↵ view  ctrl-o browser  alt-↵ copy url  ctrl-d repo  ctrl-t kind  ctrl-s sort  alt-s ▲▼  ctrl-x closed  tab mode'}
+FOOTER = '↵ open  alt-↵ copy  tab mode  ctrl-d here'
 PREVIEW_PCT = 44
 ANSI = re.compile(r'\x1b\[[0-9;]*m')
 EDITOR_NOISE = re.compile(r'^\s*(<|Stop hook feedback|\[Request interrupted|This session is being continued from a previous)')
@@ -225,7 +231,48 @@ def place(src, cwd):
     return os.path.basename(cwd.rstrip('/')) or cwd
 
 
+def gh_rows():
+    _, items = ghmode.cached_items('open')
+    out = []
+    for it in items or ():
+        r = ghmode.item_row(it)
+        out.append((r['updated'], 'gh', r['key'], '', r['kind'], f'{DIM}{r["id"]}{RESET} {r["title"]}', False))
+    return out
+
+
+def gh_column(name, width, st, right=False):
+    if st['sort'] != name:
+        return DIM + (name.rjust(width) if right else name.ljust(width)) + RESET
+    arrow = '▼' if st['desc'] else '▲'
+    return ACCENT + (f'{arrow} {name}'.rjust(width) if right else f'{name} {arrow}'.ljust(width)) + RESET
+
+
+def gh_list():
+    st = ghmode.load_state()
+    try:
+        at, rows = ghmode.rows(st)
+        status = ghmode.filter_line(st, at)
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as e:
+        rows, status = [], f'{ghmode.filter_line(st, 0)}   {RED}{e}{RESET}'
+    tw = max(10, list_width('gh') - 41)
+    now = time.time()
+    print(f'gh\t\t\t\t{status}')
+    print(f'gh\t\t\t\t  {gh_column("type", 8, st)} {gh_column("id", 8, st)} {gh_column("title", tw, st)} '
+          f'{gh_column("repo", 14, st, True)} {gh_column("age", 5, st, True)}')
+    for r in rows:
+        c = ghmode.COLOURS.get(r['type'], '')
+        title = f'{DIM}{r["title"]}{RESET}' if r['state'] != 'open' else r['title']
+        if r['comments']:
+            title += f' {DIM}[{r["comments"]}]{RESET}'
+        repo = ghmode.short(r['repo'])[:14]
+        print(f'gh\t{r["key"]}\t{r["cwd"]}\t{r["kind"]}\t{c}{ghmode.ICONS[r["kind"]]}{RESET} {c}{r["type"]:<8}{RESET} '
+              f'{DIM}{r["id"]:<8}{RESET} {fit(title, tw)} {DIM}{repo:>14} {age(r["updated"], now):>5}{RESET}')
+
+
 def cmd_list(mode, cwd_filter):
+    if mode == 'gh':
+        gh_list()
+        return
     rows = []
     if mode in ('all', 'sh'):
         rows += shell_rows(cwd_filter)
@@ -235,6 +282,8 @@ def cmd_list(mode, cwd_filter):
         rows += claude_rows(cwd_filter)
     if mode in ('all', 'ses'):
         rows += session_rows(cwd_filter)
+    if mode == 'all' and not cwd_filter:
+        rows += gh_rows()
     rows.sort(key=lambda r: r[0], reverse=True)
     now = time.time()
     width = list_width(mode)
@@ -242,7 +291,8 @@ def cmd_list(mode, cwd_filter):
     for ts, src, key, cwd, meta, text, failed in rows:
         colour = RED if failed else ACCENT if src != 'sh' else ''
         tag = f'{colour}{ICONS[src]}{src:<3}{RESET}'
-        right = f'{DIM}{place(src, cwd)[:14]:>14} {age(ts, now):>3}{RESET}'
+        loc = ghmode.short(key.split('#')[0]) if src == 'gh' else place(src, cwd)
+        right = f'{DIM}{loc[:14]:>14} {age(ts, now):>3}{RESET}'
         body = fit(text, max(10, width - cells(tag) - cells(right) - 2))
         w(f'{src}\t{key}\t{cwd}\t{meta}\t{tag} {body} {right}\n')
 
@@ -266,6 +316,10 @@ def fmt_dur(ns):
 
 
 def cmd_preview(src, key, cwd, meta):
+    if src == 'gh':
+        if key:
+            ghmode.preview(key, meta, int(os.environ.get('FZF_PREVIEW_COLUMNS') or 60) - 1)
+        return
     if src == 'sh':
         ex, dur, host, n = meta.split('|')
         db = sqlite3.connect(f'file:{ATUIN_DB}?mode=ro', uri=True)
@@ -314,7 +368,15 @@ def preview_window(mode):
 
 
 def prompt_for(mode, here):
-    return f'{mode}{" ⌂" if here else ""} ❯ '
+    return f'{mode}{" ⌂" if here and mode != "gh" else ""} ❯ '
+
+
+def footer_for(mode):
+    return FOOTERS.get(mode, FOOTER)
+
+
+def header_lines(mode):
+    return 2 if mode == 'gh' else 0
 
 
 def header_for(mode):
@@ -349,17 +411,50 @@ def list_command(py, me, mode, here, cwd):
     return f'{py} {me} list {mode}' + (f' --dir {quote(cwd)}' if here and cwd else '')
 
 
+GH_ACTIONS = {'here': 'repo', 'sh': 'sort', 'kind': 'kind', 'flip': 'flip', 'closed': 'closed'}
+
+
 def cmd_transform(action):
     mode, here = parse_prompt(os.environ.get('FZF_PROMPT', 'all ❯ '))
-    if action in ('next', 'prev'):
+    was = mode
+    if mode == 'gh' and action in GH_ACTIONS:
+        ghmode.cycle(ghmode.load_state(), GH_ACTIONS[action])
+    elif action in ('kind', 'flip', 'closed'):
+        return
+    elif action == 'refresh':
+        pass
+    elif action in ('next', 'prev'):
         mode = MODES[(MODES.index(mode) + (1 if action == 'next' else -1)) % len(MODES)]
     elif action in MODES and action != 'all':
         mode = 'all' if mode == action else action
     elif action == 'here':
         here = not here
     cmd = list_command(sys.executable, os.path.abspath(__file__), mode, here, os.environ.get('HS_CWD', ''))
+    me = f'{sys.executable} {os.path.abspath(__file__)}'
+    sync = f'+bg-transform({me} ghsync)' if mode == 'gh' and was != 'gh' else ''
+    keep = '' if action == 'refresh' else '+first'
     print(f'change-prompt({prompt_for(mode, here)})+change-header({header_for(mode)})'
-          f'+change-preview-window({preview_window(mode)})+reload({cmd})+first')
+          f'+change-footer({footer_for(mode)})+change-header-lines({header_lines(mode)})'
+          f'+change-preview-window({preview_window(mode)})+reload({cmd}){keep}{sync}')
+
+
+def cmd_ghsync():
+    mode, _ = parse_prompt(os.environ.get('FZF_PROMPT', 'all ❯ '))
+    if not ghmode.available():
+        return
+    try:
+        fetched = ghmode.sync(ghmode.load_state()['closed'])
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        return
+    if fetched and mode in ('gh', 'all'):
+        print(f'transform({sys.executable} {os.path.abspath(__file__)} transform refresh)')
+
+
+def cmd_enter(src, key, kind):
+    if src == 'gh' and key:
+        print(f'execute({sys.executable} {os.path.abspath(__file__)} view {quote(key)} {quote(kind)})')
+    elif src != 'gh':
+        print('accept')
 
 
 def quote(s):
@@ -381,6 +476,15 @@ def main(argv):
         cmd_remember(argv[2] if len(argv) > 2 else '')
     elif cmd == 'transform':
         cmd_transform(argv[2])
+    elif cmd == 'ghsync':
+        cmd_ghsync()
+    elif cmd == 'enter':
+        cmd_enter(*argv[2:5])
+    elif cmd == 'view':
+        ghmode.view(argv[2], argv[3])
+    elif cmd == 'browse':
+        if argv[2] == 'gh' and argv[3]:
+            ghmode.browse(argv[3], argv[4])
     elif cmd == 'index':
         t = time.time()
         refresh_index()

@@ -34,14 +34,19 @@ def fzf_args(py, me, st):
         '--color=hl:5:underline:bold,hl+:5:underline:bold,pointer:5,prompt:5,bg+:8,info:-1:dim',
         '--preview', f'{py} {me} preview {{1}} {{2}} {{3}} {{4}}',
         '--preview-window', hs.preview_window(st['mode']),
-        '--footer', '↵ open  alt-↵ copy  tab mode  ctrl-d here',
+        '--footer', hs.footer_for(st['mode']), '--header-lines', str(hs.header_lines(st['mode'])),
         '--bind', f'tab:transform({tr} next)',
         '--bind', f'btab:transform({tr} prev)',
         '--bind', f'ctrl-s:transform({tr} sh)',
         '--bind', f'ctrl-c:transform({tr} cc)',
         '--bind', f'ctrl-d:transform({tr} here)',
         '--bind', f'load:pos({st["pos"]})+unbind(load)',
-        '--bind', f'enter:{rem}+accept',
+        '--bind', f'enter:{rem}+transform({py} {me} enter {{1}} {{2}} {{4}})',
+        '--bind', f'ctrl-o:execute-silent({py} {me} browse {{1}} {{2}} {{4}})',
+        '--bind', f'ctrl-t:transform({tr} kind)',
+        '--bind', f'alt-s:transform({tr} flip)',
+        '--bind', f'ctrl-x:transform({tr} closed)',
+        '--bind', f'start:bg-transform({py} {me} ghsync)',
         '--bind', f'alt-enter:{rem}+print(alt-enter)+accept',
         '--bind', f'esc:{rem}+abort',
     ]
@@ -49,6 +54,11 @@ def fzf_args(py, me, st):
 
 def main(args):
     cwd = args[1] if len(args) > 1 else ''
+    pids = [p for p in (args[3] if len(args) > 3 else '').split(',') if p]
+    try:
+        hs.ghmode.open_popup(pids, cwd)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        pass
     py, me = shutil.which('python3') or '/usr/bin/python3', os.path.join(HERE, 'hs.py')
     st = hs.load_state()
     os.makedirs(os.path.dirname(hs.STATE), exist_ok=True)
@@ -60,7 +70,9 @@ def main(args):
     key = lines[0] if lines[0] == 'alt-enter' else ''
     line = lines[-1]
     src, ident, row_cwd, meta = line.split('\t')[:4]
-    if src == 'sh':
+    if src == 'gh':
+        text = hs.ghmode.url(ident, meta)
+    elif src == 'sh':
         text = hs.shell_command(ident)
     elif src == 'ses':
         text = f'claude --resume {ident}'
