@@ -45,8 +45,10 @@ def fzf_args(py, me, st):
         '--bind', f'ctrl-o:execute-silent({py} {me} browse {{1}} {{2}} {{4}})',
         '--bind', f'ctrl-t:transform({tr} kind)',
         '--bind', f'alt-s:transform({tr} flip)',
-        '--bind', f'ctrl-x:transform({tr} closed)',
-        '--bind', f'start:bg-transform({py} {me} ghsync)',
+        '--bind', f'alt-c:transform({tr} closed)',
+        '--bind', f'ctrl-x:transform({py} {me} askdelete {{1}} {{2}} {{4}} {{q}})',
+        '--bind', f'change:transform({py} {me} confirm {{q}})',
+        '--bind', f'start:unbind(change)+bg-transform({py} {me} ghsync)',
         '--bind', f'alt-enter:{rem}+print(alt-enter)+accept',
         '--bind', f'esc:{rem}+abort',
     ]
@@ -60,6 +62,7 @@ def main(args):
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
         pass
     py, me = shutil.which('python3') or '/usr/bin/python3', os.path.join(HERE, 'hs.py')
+    hs.clear_pending()
     st = hs.load_state()
     os.makedirs(os.path.dirname(hs.STATE), exist_ok=True)
     env = dict(os.environ, HS_CWD=cwd, HS_COLS=os.environ.get('OVERLAID_WINDOW_COLS', ''), FZF_DEFAULT_COMMAND=hs.list_command(py, me, st['mode'], st['here'], cwd))

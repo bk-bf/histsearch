@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import calendar
 import glob
+import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -17,11 +19,14 @@ ATUIN_DB = os.path.join(HOME, '.local/share/atuin/history.db')
 PROJECTS = os.path.join(HOME, '.claude/projects')
 STATE = os.path.join(os.environ.get('XDG_STATE_HOME', os.path.join(HOME, '.local/state')), 'histsearch', 'last.json')
 CACHE = os.path.join(os.environ.get('XDG_CACHE_HOME', os.path.join(HOME, '.cache')), 'histsearch', 'cc')
+PENDING = os.path.join(os.path.dirname(STATE), 'pending.json')
+HIDDEN = os.path.join(os.path.dirname(STATE), 'hidden.json')
+CONFIRM = 'delete '
 TEXT_CAP = 400
 MODES = ('all', 'sh', 'cc', 'ses', 'gh')
 ICONS = {'all': '', 'sh': '\ue957 ', 'cc': '\ueac7 ', 'ses': '\uec82 ', 'gh': '\uf408 '}
-FOOTERS = {'gh': '↵ view  ctrl-o browser  alt-↵ copy url  ctrl-d repo  ctrl-t kind  ctrl-s sort  alt-s ▲▼  ctrl-x closed  tab mode'}
-FOOTER = '↵ open  alt-↵ copy  tab mode  ctrl-d here'
+FOOTERS = {'gh': '↵ view  ctrl-o browser  alt-↵ copy url  ctrl-d repo  ctrl-t kind  ctrl-s sort  alt-s ▲▼  alt-c closed  tab mode'}
+FOOTER = '↵ open  alt-↵ copy  ctrl-x delete  tab mode  ctrl-d here'
 PREVIEW_PCT = 44
 ANSI = re.compile(r'\x1b\[[0-9;]*m')
 EDITOR_NOISE = re.compile(r'^\s*(<|Stop hook feedback|\[Request interrupted|This session is being continued from a previous)')
@@ -152,8 +157,21 @@ def read_session(sid):
     return meta, rows
 
 
+def row_id(sid, row):
+    return hashlib.sha1('\t'.join([sid, *row]).encode()).hexdigest()[:16]
+
+
+def load_hidden():
+    try:
+        with open(HIDDEN, encoding='utf-8') as fh:
+            return set(json.load(fh))
+    except (OSError, ValueError):
+        return set()
+
+
 def claude_rows(cwd_filter=None):
     out = []
+    hidden = load_hidden()
     for f in glob.glob(os.path.join(CACHE, '*.tsv')):
         sid = os.path.basename(f)[:-4]
         try:
@@ -163,7 +181,7 @@ def claude_rows(cwd_filter=None):
         if cwd_filter and meta['cwd'] != cwd_filter:
             continue
         for i, (ts, kind, text) in enumerate(rows):
-            if kind == 'title':
+            if kind == 'title' or row_id(sid, rows[i]) in hidden:
                 continue
             shown = f'{DIM}${RESET} {text}' if kind == 'bash' else f'{DIM}{text}{RESET}' if kind == 'claude' else text
             out.append((float(ts), 'cc', sid, meta['cwd'], f'{kind}|{i}', shown, False))
@@ -171,7 +189,7 @@ def claude_rows(cwd_filter=None):
 
 
 def session_rows(cwd_filter=None):
-    newest = {}
+    newest, groups = {}, {}
     for f in glob.glob(os.path.join(CACHE, '*.tsv')):
         sid = os.path.basename(f)[:-4]
         try:
@@ -184,9 +202,10 @@ def session_rows(cwd_filter=None):
         label = meta['title'] or (prompts[0] if prompts else sid[:8])
         row = (max(float(r[0]) for r in rows), 'ses', sid, meta['cwd'], 'session|0', label, False)
         k = (label, meta['cwd'])
+        groups.setdefault(k, []).append(sid)
         if k not in newest or row[0] > newest[k][0]:
             newest[k] = row
-    return list(newest.values())
+    return [r[:4] + (f'session|{",".join(groups[k])}',) + r[5:] for k, r in newest.items()]
 
 
 def cells(s):
@@ -341,12 +360,12 @@ def cmd_preview(src, key, cwd, meta):
             if known:
                 print(f'{DIM}{k:<5}{RESET} {v}')
         return
-    kind, idx = meta.split('|')
-    idx = int(idx)
     m, rows = read_session(key)
     if src == 'ses':
         session_preview(key, m, rows)
         return
+    kind, idx = meta.split('|')
+    idx = int(idx)
     print(f'{ACCENT}{BOLD}{m["title"] or "untitled"}{RESET}')
     ts = float(rows[idx][0]) if rows else 0
     ago = age(ts, time.time())
@@ -393,6 +412,8 @@ def header_for(mode):
 
 
 def parse_prompt(prompt):
+    if prompt.startswith(CONFIRM):
+        prompt = load_pending().get('prompt', '')
     words = prompt.split()
     return (words[0] if words and words[0] in MODES else 'all'), '⌂' in prompt
 
@@ -408,6 +429,9 @@ def load_state():
 
 
 def cmd_remember(query):
+    if os.environ.get('FZF_PROMPT', '').startswith(CONFIRM):
+        query = load_pending().get('query', '')
+        clear_pending()
     mode, here = parse_prompt(os.environ.get('FZF_PROMPT', ''))
     os.makedirs(os.path.dirname(STATE), exist_ok=True)
     tmp = STATE + '.tmp'
@@ -445,6 +469,127 @@ def cmd_transform(action):
     print(f'change-prompt({prompt_for(mode, here)})+change-header({header_for(mode)})'
           f'+change-footer({footer_for(mode)})+change-header-lines({header_lines(mode)})'
           f'+change-preview-window({preview_window(mode)})+reload({cmd}){keep}{sync}')
+
+
+def atuin(*args, check=True):
+    env = dict(os.environ)
+    env.setdefault('ATUIN_SESSION', 'histsearch')
+    r = subprocess.run(['atuin', *args], env=env, capture_output=True, text=True, timeout=30)
+    if check and r.returncode:
+        raise RuntimeError((r.stderr or r.stdout).strip().splitlines()[-1] if (r.stderr or r.stdout).strip() else 'atuin failed')
+    return r.stdout
+
+
+def utc(ts):
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(ts))
+
+
+def delete_shell(cmd):
+    base = ['search', '--filter-mode', 'global', '--search-mode', 'prefix', '--include-duplicates']
+    every = [m for m in atuin(*base, '--print0', '--format', '{command}', '--', cmd).split('\0') if m]
+    if every and all(m == cmd for m in every):
+        atuin(*base, '--delete', '--', cmd)
+        return 0
+    db = sqlite3.connect(f'file:{ATUIN_DB}?mode=ro', uri=True)
+    stamps = [t / 1e9 for (t,) in db.execute('select timestamp from history where command = ? and deleted_at is null', (cmd,))]
+    db.close()
+    skipped = 0
+    for ts in stamps:
+        window = ['--after', utc(int(ts) - 1), '--before', utc(int(ts) + 2)]
+        found = [m for m in atuin(*base, *window, '--print0', '--format', '{command}', '--', cmd).split('\0') if m]
+        if found and all(m == cmd for m in found):
+            atuin(*base, *window, '--delete', '--', cmd)
+        else:
+            skipped += 1
+    return skipped
+
+
+def delete_sessions(sids):
+    for sid in sids:
+        for path in glob.glob(os.path.join(PROJECTS, '*', sid + '.jsonl')):
+            os.unlink(path)
+        for path in glob.glob(os.path.join(PROJECTS, '*', sid)):
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+        try:
+            os.unlink(os.path.join(CACHE, sid + '.tsv'))
+        except FileNotFoundError:
+            pass
+
+
+def hide_message(sid, idx):
+    _, rows = read_session(sid)
+    hidden = load_hidden() | {row_id(sid, rows[idx])}
+    os.makedirs(os.path.dirname(HIDDEN), exist_ok=True)
+    with open(HIDDEN + '.tmp', 'w', encoding='utf-8') as fh:
+        json.dump(sorted(hidden), fh)
+    os.replace(HIDDEN + '.tmp', HIDDEN)
+
+
+def load_pending():
+    try:
+        with open(PENDING, encoding='utf-8') as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def clear_pending():
+    try:
+        os.unlink(PENDING)
+    except FileNotFoundError:
+        pass
+
+
+def plain(s):
+    return re.sub(r'[()\[\]]', '', ANSI.sub('', s))
+
+
+def delete_label(src, key, meta):
+    if src == 'sh':
+        return 'command ' + plain(shell_command(key))[:50]
+    if src == 'cc':
+        _, rows = read_session(key)
+        return 'message ' + plain(rows[int(meta.split('|')[1])][2])[:50]
+    sids = meta.split('|')[1].split(',')
+    m, _ = read_session(key)
+    n = f' {len(sids)} transcripts' if len(sids) > 1 else ''
+    return f'session{n} ' + plain(m['title'] or key[:8])[:50]
+
+
+def cmd_askdelete(src, key, meta, query):
+    if src not in ('sh', 'cc', 'ses') or not key or os.environ.get('FZF_PROMPT', '').startswith(CONFIRM):
+        return
+    os.makedirs(os.path.dirname(PENDING), exist_ok=True)
+    with open(PENDING, 'w', encoding='utf-8') as fh:
+        json.dump({'prompt': os.environ.get('FZF_PROMPT', ''), 'query': query, 'src': src, 'key': key, 'meta': meta}, fh)
+    print(f'rebind(change)+change-prompt({CONFIRM}{delete_label(src, key, meta)}? y/n ❯ )+change-query()')
+
+
+def cmd_confirm(answer):
+    if not answer:
+        return
+    p = load_pending()
+    clear_pending()
+    if not p:
+        print('unbind(change)')
+        return
+    note = ''
+    if answer.lower() == 'y':
+        try:
+            if p['src'] == 'sh':
+                skipped = delete_shell(shell_command(p['key']))
+                note = f'{skipped} occurrence(s) kept: other commands share their second' if skipped else ''
+            elif p['src'] == 'cc':
+                hide_message(p['key'], int(p['meta'].split('|')[1]))
+            else:
+                delete_sessions(p['meta'].split('|')[1].split(','))
+        except (OSError, ValueError, IndexError, RuntimeError, subprocess.SubprocessError) as e:
+            note = f'delete failed: {plain(str(e))[:80]}'
+    mode, here = parse_prompt(p['prompt'])
+    cmd = list_command(sys.executable, os.path.abspath(__file__), mode, here, os.environ.get('HS_CWD', ''))
+    foot = f'+change-footer({note})' if note else ''
+    print(f'unbind(change)+change-prompt({p["prompt"]}){foot}+reload({cmd})+change-query:{p["query"]}')
 
 
 def cmd_ghsync():
@@ -485,6 +630,10 @@ def main(argv):
         cmd_remember(argv[2] if len(argv) > 2 else '')
     elif cmd == 'transform':
         cmd_transform(argv[2])
+    elif cmd == 'askdelete':
+        cmd_askdelete(*argv[2:6])
+    elif cmd == 'confirm':
+        cmd_confirm(argv[2] if len(argv) > 2 else '')
     elif cmd == 'ghsync':
         cmd_ghsync()
     elif cmd == 'enter':

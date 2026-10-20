@@ -21,6 +21,7 @@ Open issues and pull requests also show up in `all`. Rows are newest first. Sear
 |---|---|
 | Enter | insert the command, or resume the session in a new tab |
 | Alt+Enter | copy it instead |
+| Ctrl+X | delete it, after a `y/n` in the prompt (see below) |
 | Tab / Shift+Tab | cycle mode: `all` → `sh` → `cc` → `ses` → `gh` |
 | Ctrl+S / Ctrl+C | toggle shell-only / Claude-only |
 | Ctrl+D | only entries from the directory you opened it in |
@@ -28,6 +29,8 @@ Open issues and pull requests also show up in `all`. Rows are newest first. Sear
 | Esc | close |
 
 Each new open restores your last query, mode and cursor row.
+
+Ctrl+X on a `sh` row deletes every run of that command through atuin, so the deletion syncs. A run that shares its second with a longer command starting the same way is kept, and the footer says how many. On a `cc` row it hides that message from histsearch. On a `ses` row it **deletes the session's transcripts** from `~/.claude/projects`, every merged continuation included, so `claude --resume` can no longer find them.
 
 ### In `gh` mode
 
@@ -39,7 +42,7 @@ Each new open restores your last query, mode and cursor row.
 | Ctrl+D | step through the repos you are working in, then all |
 | Ctrl+T | all (issues, pull requests and commits) → issues → pull requests → commits |
 | Ctrl+S / Alt+S | next sort column (age, type, id, title, repo) / flip the direction |
-| Ctrl+X | include closed issues and pull requests |
+| Alt+C | include closed issues and pull requests |
 
 The viewer has pages, switched with Tab:
 
