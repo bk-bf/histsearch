@@ -138,7 +138,7 @@ def fetch_repo_list():
 
 
 def sync(closed=False):
-    fetched = False
+    fetched = sync_commits(load_state())
     for state in ('open', 'closed') if closed else ('open',):
         at, _ = cached_items(state)
         if time.time() - at < STALE_S:
@@ -148,6 +148,42 @@ def sync(closed=False):
     repos = read_json(path('repos.json'))
     if not repos or time.time() - repos['at'] > REPO_LIST_STALE_S:
         fetch_repo_list()
+    return fetched
+
+
+def active_repos(its):
+    out = []
+    for it in sorted(its, key=lambda i: -i['updated']):
+        if it['repo'] not in out:
+            out.append(it['repo'])
+    return out
+
+
+def repo_choices(st):
+    _, its = cached_items('open')
+    return ['all', *st['repos'], *(r for r in active_repos(its or []) if r not in st['repos'])]
+
+
+def commit_repos(st, its):
+    if st['repo'] != 'all':
+        return [st['repo']]
+    return st['repos'] or active_repos(its)[:SESSION_REPOS_MAX]
+
+
+def sync_commits(st):
+    if st['repos']:
+        return False
+    _, its = cached_items('open')
+    fetched = False
+    for repo in commit_repos(dict(st, repo='all'), its or []):
+        data = read_json(path('commits', repo.replace('/', '_') + '.json'))
+        if data and time.time() - data['at'] < COMMITS_STALE_S:
+            continue
+        try:
+            remote_commits(repo)
+        except (RuntimeError, subprocess.SubprocessError, OSError, ValueError):
+            continue
+        fetched = True
     return fetched
 
 
@@ -296,7 +332,7 @@ def open_popup(pids, cwd):
 
 def cycle(st, action):
     if action == 'repo':
-        choices = ['all', *st['repos']]
+        choices = repo_choices(st)
         st['repo'] = choices[(choices.index(st['repo']) + 1) % len(choices)] if st['repo'] in choices else 'all'
     elif action == 'kind':
         st['kind'] = KINDS[(KINDS.index(st['kind']) + 1) % len(KINDS)]
@@ -332,13 +368,17 @@ def remote_commits(repo):
     return rows
 
 
-def commit_rows(st):
-    repos = [st['repo']] if st['repo'] != 'all' else st['repos']
+def commit_rows(st, its):
     out = []
-    for repo in repos:
+    for repo in commit_repos(st, its):
         root = st['roots'].get(repo)
         try:
-            commits = local_commits(repo, root) if root and os.path.isdir(root) else remote_commits(repo)
+            if root and os.path.isdir(root):
+                commits = local_commits(repo, root)
+            elif st['repo'] == 'all':
+                commits = (read_json(path('commits', repo.replace('/', '_') + '.json')) or {}).get('rows', [])
+            else:
+                commits = remote_commits(repo)
         except (RuntimeError, subprocess.SubprocessError, OSError):
             continue
         for c in commits:
@@ -356,11 +396,9 @@ def item_row(it):
 
 
 def rows(st):
-    out = commit_rows(st) if st['kind'] in ('all', 'commit') else []
-    if st['kind'] == 'commit':
-        at, _ = cached_items('open')
-    else:
-        at, its = items(st['closed'])
+    at, its = items(st['closed'])
+    out = commit_rows(st, its) if st['kind'] in ('all', 'commit') else []
+    if st['kind'] != 'commit':
         out += [item_row(i) for i in its
                 if (st['repo'] == 'all' or i['repo'] == st['repo'])
                 and (st['kind'] == 'all' or (st['kind'] == 'pr') == i['pr'])]
@@ -380,9 +418,12 @@ def filter_line(st, synced_at):
         return f'{DIM}{key}{RESET} ' + ' '.join(f'{ACCENT}{BOLD}{o}{RESET}' if o == on else f'{DIM}{o}{RESET}'
                                                 for o in options)
     repos = ['all'] + [f'⌂ {short(r)}' for r in st['repos']]
-    on = 'all' if st['repo'] == 'all' else f'⌂ {short(st["repo"])}'
+    on = 'all' if st['repo'] == 'all' else f'⌂ {short(st["repo"])}' if st['repo'] in st['repos'] else short(st['repo'])
     if on not in repos:
         repos.append(on)
+    rest = len(repo_choices(st)) - len(repos)
+    if rest > 0:
+        repos.append(f'+{rest}')
     parts = [group('ctrl-t', KINDS, st['kind'])]
     if st['closed']:
         parts.append(f'{ACCENT}closed too{RESET}')
