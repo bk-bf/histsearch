@@ -22,6 +22,7 @@ CACHE = os.path.join(os.environ.get('XDG_CACHE_HOME', os.path.join(HOME, '.cache
 PENDING = os.path.join(os.path.dirname(STATE), 'pending.json')
 HIDDEN = os.path.join(os.path.dirname(STATE), 'hidden.json')
 CONFIRM = 'delete '
+GH_POLL_S = 20
 TEXT_CAP = 400
 MODES = ('all', 'sh', 'cc', 'ses', 'gh')
 ICONS = {'all': '', 'sh': '\ue957 ', 'cc': '\ueac7 ', 'ses': '\uec82 ', 'gh': '\uf408 '}
@@ -451,13 +452,13 @@ GH_ACTIONS = {'here': 'repo', 'sh': 'sort', 'kind': 'kind', 'flip': 'flip', 'clo
 
 def cmd_transform(action):
     mode, here = parse_prompt(os.environ.get('FZF_PROMPT', 'all ❯ '))
-    was = mode
     if mode == 'gh' and action in GH_ACTIONS:
         ghmode.cycle(ghmode.load_state(), GH_ACTIONS[action])
     elif action in ('kind', 'flip', 'closed'):
         return
     elif action == 'refresh':
-        pass
+        if mode not in ('gh', 'all') or load_pending():
+            return
     elif action in ('next', 'prev'):
         mode = MODES[(MODES.index(mode) + (1 if action == 'next' else -1)) % len(MODES)]
     elif action in MODES and action != 'all':
@@ -466,11 +467,10 @@ def cmd_transform(action):
         here = not here
     cmd = list_command(sys.executable, os.path.abspath(__file__), mode, here, os.environ.get('HS_CWD', ''))
     me = f'{sys.executable} {os.path.abspath(__file__)}'
-    sync = f'+bg-transform({me} ghsync)' if mode == 'gh' and was != 'gh' else ''
     keep = '' if action == 'refresh' else '+first'
     print(f'change-prompt({prompt_for(mode, here)})+change-header({header_for(mode)})'
           f'+change-footer({footer_for(mode)})+change-header-lines({header_lines(mode)})'
-          f'+change-preview-window({preview_window(mode)})+reload({cmd}){keep}{sync}')
+          f'+change-preview-window({preview_window(mode)})+reload({cmd}){keep}')
 
 
 def atuin(*args, check=True):
@@ -594,16 +594,34 @@ def cmd_confirm(answer):
     print(f'unbind(change)+change-prompt({p["prompt"]}){foot}+reload({cmd})+change-query:{p["query"]}')
 
 
-def cmd_ghsync():
-    mode, _ = parse_prompt(os.environ.get('FZF_PROMPT', 'all ❯ '))
+def fzf_ancestor():
+    pid = os.getppid()
+    while pid > 1:
+        try:
+            with open(f'/proc/{pid}/stat') as fh:
+                stat = fh.read()
+        except OSError:
+            return 0
+        if stat[stat.index('(') + 1:stat.rindex(')')] == 'fzf':
+            return pid
+        pid = int(stat[stat.rindex(')') + 2:].split()[1])
+    return 0
+
+
+def cmd_ghsync(wait):
     if not ghmode.available():
         return
+    fzf = fzf_ancestor()
+    if wait:
+        time.sleep(GH_POLL_S)
+        if not fzf or not os.path.exists(f'/proc/{fzf}'):
+            return
+    me = f'{sys.executable} {os.path.abspath(__file__)}'
     try:
-        fetched = ghmode.sync(ghmode.load_state()['states'] == 'closed')
+        changed = ghmode.sync(ghmode.load_state()['states'] == 'closed')
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
-        return
-    if fetched and mode in ('gh', 'all'):
-        print(f'transform({sys.executable} {os.path.abspath(__file__)} transform refresh)')
+        changed = False
+    print((f'transform({me} transform refresh)+' if changed else '') + f'bg-transform({me} ghsync wait)')
 
 
 def cmd_enter(src, key, kind):
@@ -637,7 +655,7 @@ def main(argv):
     elif cmd == 'confirm':
         cmd_confirm(argv[2] if len(argv) > 2 else '')
     elif cmd == 'ghsync':
-        cmd_ghsync()
+        cmd_ghsync(len(argv) > 2 and argv[2] == 'wait')
     elif cmd == 'enter':
         cmd_enter(*argv[2:5])
     elif cmd == 'view':

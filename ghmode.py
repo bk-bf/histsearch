@@ -20,9 +20,9 @@ CONFIG = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.join(HOME, '.
 PROJECTS = os.path.join(HOME, '.claude', 'projects')
 SESSIONS = os.path.join(HOME, '.claude', 'sessions')
 
-STALE_S = 60
+STALE_S = 15
 REPO_LIST_STALE_S = 86400
-COMMITS_STALE_S = 120
+COMMITS_STALE_S = 60
 SESSION_REPOS_MAX = 6
 KINDS = ('all', 'issue', 'pr', 'commit')
 STATES = ('open', 'closed')
@@ -123,7 +123,9 @@ def fetch_items(state):
         out = run_gh(['search', 'issues', '--owner', owner, '--include-prs', '--state', state,
                       '--sort', 'updated', '--limit', '300' if state == 'open' else '100', '--json', FIELDS])
         items += [normalise(r) for r in json.loads(out)]
+    _, before = cached_items(state)
     write_json(path(f'items-{state}.json'), {'at': time.time(), 'items': items})
+    return items, items != before
     return items
 
 
@@ -146,8 +148,7 @@ def sync(closed=False):
         at, _ = cached_items(state)
         if time.time() - at < STALE_S:
             continue
-        fetch_items(state)
-        fetched = True
+        fetched = fetch_items(state)[1] or fetched
     repos = read_json(path('repos.json'))
     if not repos or time.time() - repos['at'] > REPO_LIST_STALE_S:
         fetch_repo_list()
@@ -183,23 +184,22 @@ def sync_commits(st):
         if data and time.time() - data['at'] < COMMITS_STALE_S:
             continue
         try:
-            remote_commits(repo)
+            fetched = remote_commits(repo) != (data or {}).get('rows') or fetched
         except (RuntimeError, subprocess.SubprocessError, OSError, ValueError):
             continue
-        fetched = True
     return fetched
 
 
 def items(closed=False):
     at, open_items = cached_items('open')
     if open_items is None and available():
-        open_items = fetch_items('open')
+        open_items, _ = fetch_items('open')
         at = time.time()
     out = list(open_items or [])
     if closed:
         _, closed_items = cached_items('closed')
         if closed_items is None and available():
-            closed_items = fetch_items('closed')
+            closed_items, _ = fetch_items('closed')
         out += closed_items or []
     return at, out
 

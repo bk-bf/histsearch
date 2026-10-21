@@ -56,7 +56,7 @@ The viewer has pages, switched with Tab:
 
 "The repos you are working in" come from the focused pane. If it runs Claude Code, they are the repos that session has read, edited or run commands in, most recent first, so a session started in your home directory still finds them. A path that does not exist locally, such as one on a server reached over ssh, is matched by name against your GitHub repos. Without a Claude session, it is the repo of the current directory. The popup opens on the first of them. With none, `all` shows the commits of the repos with the most recent issue and pull request activity, fetched in the background.
 
-Issues and pull requests come from `gh search` and are cached; the list shows the cache at once and refreshes it in the background when it is older than a minute. Commits come from the local clone's `git log`, or from the GitHub API for repos without one. Opening the browser from a pane that runs ssh or mosh works too, because the kitten runs in kitty on your machine.
+Issues and pull requests come from `gh search` and are cached; the list shows the cache at once, and while the popup is open it asks GitHub again every 20 seconds and reloads the list when something changed. Commits come from the local clone's `git log`, or from the GitHub API for repos without one. Opening the browser from a pane that runs ssh or mosh works too, because the kitten runs in kitty on your machine.
 
 ## Configuration
 
