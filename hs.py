@@ -26,8 +26,16 @@ GH_POLL_S = 20
 TEXT_CAP = 400
 MODES = ('all', 'sh', 'cc', 'ses', 'gh')
 ICONS = {'all': '', 'sh': '\ue957 ', 'cc': '\ueac7 ', 'ses': '\uec82 ', 'gh': '\uf408 '}
-FOOTERS = {'gh': '↵ view  ctrl-o browser  alt-↵ copy url  ctrl-d repo  ctrl-t kind  ctrl-s sort  alt-s ▲▼  tab mode'}
-FOOTER = '↵ open  alt-↵ copy  ctrl-x delete  tab mode  ctrl-d here'
+FOOTERS = {'gh': '↵ view  ctrl-o browser  ctrl-r refresh  tab mode  ? keys'}
+FOOTER = '↵ open  ctrl-x delete  ctrl-d here  tab mode  ? keys'
+COMMON_KEYS = [('ctrl-r', 'refresh'), ('tab / shift-tab', 'next / previous mode'),
+               ('ctrl-p / ctrl-n', 'earlier searches'), ('?', 'this list'), ('esc', 'close')]
+KEYS = {'gh': [('↵', 'read it here'), ('ctrl-o', 'open in the browser'), ('alt-↵', 'copy the url'),
+               ('ctrl-d', 'next repo'), ('ctrl-t', 'all, issues, pull requests, commits'),
+               ('alt-c', 'open or closed'), ('ctrl-s', 'next sort column'), ('alt-s', 'flip the sort')],
+        '': [('↵', 'insert the command, or resume the session'), ('alt-↵', 'copy it'),
+             ('ctrl-x', 'delete it'), ('ctrl-d', 'only this directory'),
+             ('ctrl-s', 'shell history only'), ('ctrl-c', 'claude only')]}
 PREVIEW_PCT = 44
 ANSI = re.compile(r'\x1b\[[0-9;]*m')
 EDITOR_NOISE = re.compile(r'^\s*(<|Stop hook feedback|\[Request interrupted|This session is being continued from a previous)')
@@ -459,6 +467,9 @@ def cmd_transform(action):
     elif action == 'refresh':
         if mode not in ('gh', 'all') or load_pending():
             return
+    elif action == 'reload':
+        if load_pending():
+            return
     elif action in ('next', 'prev'):
         mode = MODES[(MODES.index(mode) + (1 if action == 'next' else -1)) % len(MODES)]
     elif action in MODES and action != 'all':
@@ -467,10 +478,11 @@ def cmd_transform(action):
         here = not here
     cmd = list_command(sys.executable, os.path.abspath(__file__), mode, here, os.environ.get('HS_CWD', ''))
     me = f'{sys.executable} {os.path.abspath(__file__)}'
-    keep = '' if action == 'refresh' else '+first'
+    keep = '' if action in ('refresh', 'reload') else '+first'
+    sync = f'+bg-transform({me} ghsync force)' if action == 'reload' and mode in ('gh', 'all') else ''
     print(f'change-prompt({prompt_for(mode, here)})+change-header({header_for(mode)})'
           f'+change-footer({footer_for(mode)})+change-header-lines({header_lines(mode)})'
-          f'+change-preview-window({preview_window(mode)})+reload({cmd}){keep}')
+          f'+change-preview-window({preview_window(mode)})+reload({cmd}){keep}{sync}')
 
 
 def atuin(*args, check=True):
@@ -608,20 +620,48 @@ def fzf_ancestor():
     return 0
 
 
-def cmd_ghsync(wait):
+def cmd_ghsync(how):
     if not ghmode.available():
         return
     fzf = fzf_ancestor()
-    if wait:
+    if how == 'wait':
         time.sleep(GH_POLL_S)
         if not fzf or not os.path.exists(f'/proc/{fzf}'):
             return
     me = f'{sys.executable} {os.path.abspath(__file__)}'
     try:
-        changed = ghmode.sync(ghmode.load_state()['states'] == 'closed')
+        changed = ghmode.sync(ghmode.load_state()['states'] == 'closed', force=how == 'force')
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
         changed = False
-    print((f'transform({me} transform refresh)+' if changed else '') + f'bg-transform({me} ghsync wait)')
+    actions = [f'transform({me} transform refresh)'] if changed else []
+    if how != 'force':
+        actions.append(f'bg-transform({me} ghsync wait)')
+    print('+'.join(actions))
+
+
+def cmd_keys():
+    import termios
+    import tty
+    mode, _ = parse_prompt(os.environ.get('FZF_PROMPT', 'all ❯ '))
+    keys = KEYS['gh' if mode == 'gh' else ''] + COMMON_KEYS
+    kw = max(cells(k) for k, _ in keys)
+    lines = [f'{ACCENT}{BOLD}{mode} keys{RESET}', ''] + [f'{ACCENT}{k}{RESET}{" " * (kw - cells(k))}   {d}' for k, d in keys]
+    fd = os.open('/dev/tty', os.O_RDWR)
+    cols, rows = os.get_terminal_size(fd)
+    width = kw + 3 + max(cells(d) for _, d in keys)
+    pad = ' ' * max(0, (cols - width) // 2)
+    top = max(0, (rows - len(lines) - 2) // 2)
+    out = '\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H' + '\r\n' * top + ''.join(f'{pad}{l}\r\n' for l in lines)
+    out += f'\r\n{pad}{DIM}any key closes{RESET}'
+    saved = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        os.write(fd, out.encode())
+        os.read(fd, 32)
+    finally:
+        os.write(fd, b'\x1b[?25h\x1b[?1049l')
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+        os.close(fd)
 
 
 def cmd_enter(src, key, kind):
@@ -655,7 +695,9 @@ def main(argv):
     elif cmd == 'confirm':
         cmd_confirm(argv[2] if len(argv) > 2 else '')
     elif cmd == 'ghsync':
-        cmd_ghsync(len(argv) > 2 and argv[2] == 'wait')
+        cmd_ghsync(argv[2] if len(argv) > 2 else '')
+    elif cmd == 'keys':
+        cmd_keys()
     elif cmd == 'enter':
         cmd_enter(*argv[2:5])
     elif cmd == 'view':

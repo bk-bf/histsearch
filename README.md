@@ -26,6 +26,8 @@ Open issues and pull requests also show up in `all`. Rows are newest first. Sear
 | Ctrl+S / Ctrl+C | toggle shell-only / Claude-only |
 | Ctrl+D | only entries from the directory you opened it in |
 | Ctrl+P / Ctrl+N | earlier searches |
+| Ctrl+R | refresh the list now, GitHub included |
+| ? | show every key for the current mode |
 | Esc | close |
 
 Each new open restores your last query, mode and cursor row.

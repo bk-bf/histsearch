@@ -142,11 +142,11 @@ def fetch_repo_list():
     write_json(path('repos.json'), {'at': time.time(), 'repos': names})
 
 
-def sync(closed=False):
-    fetched = sync_commits(load_state())
+def sync(closed=False, force=False):
+    fetched = sync_commits(load_state(), force)
     for state in ('open', 'closed') if closed else ('open',):
         at, _ = cached_items(state)
-        if time.time() - at < STALE_S:
+        if not force and time.time() - at < STALE_S:
             continue
         fetched = fetch_items(state)[1] or fetched
     repos = read_json(path('repos.json'))
@@ -174,17 +174,17 @@ def commit_repos(st, its):
     return st['repos'] or active_repos([i for i in its if i['state'] == 'open'])[:SESSION_REPOS_MAX]
 
 
-def sync_commits(st):
+def sync_commits(st, force=False):
     if st['repos']:
         return False
     _, its = cached_items('open')
     fetched = False
     for repo in commit_repos(dict(st, repo='all'), its or []):
         data = read_json(path('commits', repo.replace('/', '_') + '.json'))
-        if data and time.time() - data['at'] < COMMITS_STALE_S:
+        if not force and data and time.time() - data['at'] < COMMITS_STALE_S:
             continue
         try:
-            fetched = remote_commits(repo) != (data or {}).get('rows') or fetched
+            fetched = remote_commits(repo, force) != (data or {}).get('rows') or fetched
         except (RuntimeError, subprocess.SubprocessError, OSError, ValueError):
             continue
     return fetched
@@ -359,10 +359,10 @@ def local_commits(repo, root):
     return rows
 
 
-def remote_commits(repo):
+def remote_commits(repo, force=False):
     p = path('commits', repo.replace('/', '_') + '.json')
     data = read_json(p)
-    if data and time.time() - data['at'] < COMMITS_STALE_S:
+    if not force and data and time.time() - data['at'] < COMMITS_STALE_S:
         return data['rows']
     raw = json.loads(run_gh(['api', f'repos/{repo}/commits?per_page=100']))
     rows = [{'sha': c['sha'], 'updated': epoch(c['commit']['author']['date']), 'author': c['commit']['author']['name'],

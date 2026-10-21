@@ -46,6 +46,8 @@ def fzf_args(py, me, st):
         '--bind', f'ctrl-t:transform({tr} kind)',
         '--bind', f'alt-s:transform({tr} flip)',
         '--bind', f'alt-c:transform({tr} closed)',
+        '--bind', f'ctrl-r:transform({tr} reload)',
+        '--bind', f'?:execute({py} {me} keys)',
         '--bind', f'ctrl-x:transform({py} {me} askdelete {{1}} {{2}} {{4}} {{q}})',
         '--bind', f'change:transform({py} {me} confirm {{q}})',
         '--bind', f'start:unbind(change)+bg-transform({py} {me} ghsync)',
