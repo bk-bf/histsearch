@@ -21,6 +21,7 @@ STATE = os.path.join(os.environ.get('XDG_STATE_HOME', os.path.join(HOME, '.local
 CACHE = os.path.join(os.environ.get('XDG_CACHE_HOME', os.path.join(HOME, '.cache')), 'histsearch', 'cc')
 PENDING = os.path.join(os.path.dirname(STATE), 'pending.json')
 HIDDEN = os.path.join(os.path.dirname(STATE), 'hidden.json')
+BACKDROP = os.path.join(os.path.dirname(STATE), 'keys-backdrop')
 CONFIRM = 'delete '
 GH_POLL_S = 20
 TEXT_CAP = 400
@@ -639,20 +640,42 @@ def cmd_ghsync(how):
     print('+'.join(actions))
 
 
+def cmd_snap():
+    try:
+        r = subprocess.run(['kitty', '@', 'get-text', '--match', f'id:{os.environ["KITTY_WINDOW_ID"]}', '--extent', 'screen'],
+                           capture_output=True, text=True, timeout=2)
+        text = r.stdout if r.returncode == 0 else ''
+    except (KeyError, OSError, subprocess.SubprocessError):
+        text = ''
+    with open(BACKDROP, 'w') as fh:
+        fh.write(text)
+
+
 def cmd_keys():
     import termios
     import tty
     mode, _ = parse_prompt(os.environ.get('FZF_PROMPT', 'all ❯ '))
     keys = KEYS['gh' if mode == 'gh' else ''] + COMMON_KEYS
     kw = max(cells(k) for k, _ in keys)
-    lines = [f'{ACCENT}{BOLD}{mode} keys{RESET}', ''] + [f'{ACCENT}{k}{RESET}{" " * (kw - cells(k))}   {d}' for k, d in keys]
+    body = [f'{ACCENT}{k}{RESET}{" " * (kw - cells(k))}   {d}' for k, d in keys]
+    inner = max(cells(ANSI.sub('', l)) for l in body) + 4
+    try:
+        with open(BACKDROP) as fh:
+            backdrop = fh.read().split('\n')
+        os.unlink(BACKDROP)
+    except OSError:
+        backdrop = []
     fd = os.open('/dev/tty', os.O_RDWR)
     cols, rows = os.get_terminal_size(fd)
-    width = kw + 3 + max(cells(d) for _, d in keys)
-    pad = ' ' * max(0, (cols - width) // 2)
-    top = max(0, (rows - len(lines) - 2) // 2)
-    out = '\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H' + '\r\n' * top + ''.join(f'{pad}{l}\r\n' for l in lines)
-    out += f'\r\n{pad}{DIM}any key closes{RESET}'
+    title = f' {mode} keys '
+    box = [f'{DIM}╭─{RESET}{ACCENT}{BOLD}{title}{RESET}{DIM}{"─" * (inner - 1 - cells(title))}╮{RESET}',
+           f'{DIM}│{RESET}{" " * inner}{DIM}│{RESET}']
+    box += [f'{DIM}│{RESET}  {l}{" " * (inner - 2 - cells(ANSI.sub('', l)))}{DIM}│{RESET}' for l in body]
+    box += [f'{DIM}│{RESET}{" " * inner}{DIM}│{RESET}', f'{DIM}╰{"─" * inner}╯{RESET}']
+    top, left = max(0, (rows - len(box)) // 2), max(0, (cols - inner - 2) // 2)
+    out = '\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H' + DIM
+    out += '\r\n'.join(fit(l.replace('\xa0', ' '), cols).rstrip() for l in backdrop[:rows]) + RESET
+    out += ''.join(f'\x1b[{top + n + 1};{left + 1}H{l}' for n, l in enumerate(box))
     saved = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
@@ -698,6 +721,8 @@ def main(argv):
         cmd_ghsync(argv[2] if len(argv) > 2 else '')
     elif cmd == 'keys':
         cmd_keys()
+    elif cmd == 'snap':
+        cmd_snap()
     elif cmd == 'enter':
         cmd_enter(*argv[2:5])
     elif cmd == 'view':
