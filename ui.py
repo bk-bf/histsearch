@@ -67,7 +67,7 @@ def main(args):
     hs.clear_pending()
     st = hs.load_state()
     os.makedirs(os.path.dirname(hs.STATE), exist_ok=True)
-    env = dict(os.environ, HS_CWD=cwd, HS_COLS=os.environ.get('OVERLAID_WINDOW_COLS', ''), FZF_DEFAULT_COMMAND=hs.list_command(py, me, st['mode'], st['here'], cwd))
+    env = dict(os.environ, HS_CWD=cwd, HS_KITTY=args[4] if len(args) > 4 else '', HS_COLS=os.environ.get('OVERLAID_WINDOW_COLS', ''), FZF_DEFAULT_COMMAND=hs.list_command(py, me, st['mode'], st['here'], cwd))
     p = subprocess.run(fzf_args(py, me, st), env=env, stdout=subprocess.PIPE, text=True)
     lines = [l for l in p.stdout.split('\n') if l]
     if p.returncode != 0 or not lines:

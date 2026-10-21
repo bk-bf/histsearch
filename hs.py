@@ -641,12 +641,18 @@ def cmd_ghsync(how):
 
 
 def cmd_snap():
+    to = os.environ.get('HS_KITTY') or os.environ.get('KITTY_LISTEN_ON', '')
+    wid = os.environ.get('KITTY_WINDOW_ID', '')
+    cmd = ['kitty', '@', *(['--to', to] if to else []), 'get-text', '--extent', 'screen',
+           '--match', f'id:{wid}' if wid else 'state:focused']
     try:
-        r = subprocess.run(['kitty', '@', 'get-text', '--match', f'id:{os.environ["KITTY_WINDOW_ID"]}', '--extent', 'screen'],
-                           capture_output=True, text=True, timeout=2)
-        text = r.stdout if r.returncode == 0 else ''
-    except (KeyError, OSError, subprocess.SubprocessError):
-        text = ''
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=2, stdin=subprocess.DEVNULL)
+        text, err = (r.stdout, '') if r.returncode == 0 else ('', r.stderr)
+    except (OSError, subprocess.SubprocessError) as e:
+        text, err = '', str(e)
+    if err:
+        with open(BACKDROP + '.log', 'a') as fh:
+            fh.write(f'{time.strftime("%F %T")} {cmd} {err.strip()}\n')
     with open(BACKDROP, 'w') as fh:
         fh.write(text)
 

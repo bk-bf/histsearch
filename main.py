@@ -72,4 +72,4 @@ def handle_result(args, answer, target_window_id, boss):
     if fg & set(cfg['passthrough']):
         w.send_key(cfg['key'])
         return
-    boss.run_kitten_with_metadata(UI, args=[cwd, pane, pid_list], window=w)
+    boss.run_kitten_with_metadata(UI, args=[cwd, pane, pid_list, boss.listening_on or ''], window=w)
