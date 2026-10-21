@@ -289,7 +289,9 @@ def gh_list():
         if r['comments']:
             title += f' {DIM}[{r["comments"]}]{RESET}'
         repo = ghmode.short(r['repo'])[:14]
-        print(f'gh\t{r["key"]}\t{r["cwd"]}\t{r["kind"]}\t{c}{ghmode.ICONS[r["kind"]]}{RESET} {c}{r["type"]:<8}{RESET} '
+        icon, ic = ghmode.STATE_ICONS.get((r['kind'], r['state']), (ghmode.ICONS[r['kind']], c))
+        tc = c if r['state'] == 'open' else DIM
+        print(f'gh\t{r["key"]}\t{r["cwd"]}\t{r["kind"]}\t{ic}{icon}{RESET} {tc}{r["type"]:<8}{RESET} '
               f'{DIM}{r["id"]:<8}{RESET} {fit(title, tw)} {DIM}{repo:>14} {age(r["updated"], now):>5}{RESET}')
 
 
@@ -597,7 +599,7 @@ def cmd_ghsync():
     if not ghmode.available():
         return
     try:
-        fetched = ghmode.sync(ghmode.load_state()['closed'])
+        fetched = ghmode.sync(ghmode.load_state()['states'] != 'open')
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
         return
     if fetched and mode in ('gh', 'all'):

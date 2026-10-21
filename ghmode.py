@@ -25,6 +25,7 @@ REPO_LIST_STALE_S = 86400
 COMMITS_STALE_S = 120
 SESSION_REPOS_MAX = 6
 KINDS = ('all', 'issue', 'pr', 'commit')
+STATES = ('open', 'closed', 'both')
 SORTS = ('age', 'type', 'id', 'title', 'repo')
 DESC_FIRST = ('age', 'id')
 FIELDS = 'repository,number,title,labels,updatedAt,createdAt,commentsCount,url,state,isPullRequest,author'
@@ -33,6 +34,8 @@ DIM, RESET, BOLD, ACCENT = '\x1b[2m', '\x1b[0m', '\x1b[1m', '\x1b[35m'
 COLOURS = {'bug': '\x1b[31m', 'feature': '\x1b[32m', 'chore': '\x1b[34m', 'docs': '\x1b[36m',
            'decision': '\x1b[33m', 'pr': '\x1b[38;5;141m', 'commit': '\x1b[36m', 'issue': ''}
 ICONS = {'issue': '', 'pr': '', 'commit': ''}
+STATE_ICONS = {('issue', 'closed'): ('', '\x1b[38;5;141m'), ('pr', 'merged'): ('', '\x1b[38;5;141m'),
+               ('pr', 'closed'): ('', '\x1b[31m')}
 GITHUB_URL = re.compile(r'github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?/?$')
 PATH_IN_TEXT = re.compile(r'(?<![\w.:/-])(~?/[\w.@+-]+(?:/[\w.@+-]+)*)')
 LINK = re.compile(r'\[([^\]]+)\]\((?:[^)\s]+)\)')
@@ -100,7 +103,7 @@ def load_state():
     st = read_json(STATE, {}) or {}
     return {'repos': st.get('repos', []), 'roots': st.get('roots', {}), 'repo': st.get('repo', 'all'),
             'kind': st.get('kind', 'all'), 'sort': st.get('sort', 'age'), 'desc': st.get('desc', True),
-            'closed': bool(st.get('closed'))}
+            'states': st.get('states') if st.get('states') in STATES else 'open'}
 
 
 def save_state(st):
@@ -167,7 +170,7 @@ def repo_choices(st):
 def commit_repos(st, its):
     if st['repo'] != 'all':
         return [st['repo']]
-    return st['repos'] or active_repos(its)[:SESSION_REPOS_MAX]
+    return st['repos'] or active_repos([i for i in its if i['state'] == 'open'])[:SESSION_REPOS_MAX]
 
 
 def sync_commits(st):
@@ -342,7 +345,7 @@ def cycle(st, action):
     elif action == 'flip':
         st['desc'] = not st['desc']
     elif action == 'closed':
-        st['closed'] = not st['closed']
+        st['states'] = STATES[(STATES.index(st['states']) + 1) % len(STATES)]
     save_state(st)
 
 
@@ -396,11 +399,12 @@ def item_row(it):
 
 
 def rows(st):
-    at, its = items(st['closed'])
-    out = commit_rows(st, its) if st['kind'] in ('all', 'commit') else []
+    at, its = items(st['states'] != 'open')
+    out = commit_rows(st, its) if st['kind'] in ('all', 'commit') and st['states'] != 'closed' else []
     if st['kind'] != 'commit':
         out += [item_row(i) for i in its
                 if (st['repo'] == 'all' or i['repo'] == st['repo'])
+                and (st['states'] == 'both' or (i['state'] == 'open') == (st['states'] == 'open'))
                 and (st['kind'] == 'all' or (st['kind'] == 'pr') == i['pr'])]
     keys = {'age': lambda r: r['updated'], 'type': lambda r: (r['type'], -r['updated']),
             'id': lambda r: (r['repo'], r['num']), 'title': lambda r: r['title'].lower(),
@@ -424,7 +428,7 @@ def filter_line(st, synced_at):
     rest = len(repo_choices(st)) - len(repos)
     if rest > 0:
         repos.append(f'+{rest}')
-    parts = [group('ctrl-t', KINDS, st['kind']), group('alt-c', ['closed'], 'closed' if st['closed'] else '')]
+    parts = [group('ctrl-t', KINDS, st['kind']), group('alt-c', STATES, st['states'])]
     if not available():
         parts.append(f'{DIM}gh is not installed{RESET}')
     elif synced_at:
