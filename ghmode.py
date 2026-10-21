@@ -424,9 +424,7 @@ def filter_line(st, synced_at):
     rest = len(repo_choices(st)) - len(repos)
     if rest > 0:
         repos.append(f'+{rest}')
-    parts = [group('ctrl-t', KINDS, st['kind'])]
-    if st['closed']:
-        parts.append(f'{ACCENT}closed too{RESET}')
+    parts = [group('ctrl-t', KINDS, st['kind']), group('alt-c', ['closed'], 'closed' if st['closed'] else '')]
     if not available():
         parts.append(f'{DIM}gh is not installed{RESET}')
     elif synced_at:
