@@ -599,7 +599,7 @@ def cmd_ghsync():
     if not ghmode.available():
         return
     try:
-        fetched = ghmode.sync(ghmode.load_state()['states'] != 'open')
+        fetched = ghmode.sync(ghmode.load_state()['states'] == 'closed')
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
         return
     if fetched and mode in ('gh', 'all'):

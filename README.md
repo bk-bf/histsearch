@@ -42,7 +42,7 @@ Ctrl+X on a `sh` row deletes every run of that command through atuin, so the del
 | Ctrl+D | step through the repos you are working in, then every other repo with open issues or pull requests, then all |
 | Ctrl+T | all (issues, pull requests and commits) → issues → pull requests → commits |
 | Ctrl+S / Alt+S | next sort column (age, type, id, title, repo) / flip the direction |
-| Alt+C | open → closed → both; a closed issue or merged pull request has a purple icon, a pull request closed unmerged a red one |
+| Alt+C | switch between open and closed; a closed issue or merged pull request has a purple icon, a pull request closed unmerged a red one |
 
 The viewer has pages, switched with Tab:
 

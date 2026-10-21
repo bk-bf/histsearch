@@ -25,7 +25,7 @@ REPO_LIST_STALE_S = 86400
 COMMITS_STALE_S = 120
 SESSION_REPOS_MAX = 6
 KINDS = ('all', 'issue', 'pr', 'commit')
-STATES = ('open', 'closed', 'both')
+STATES = ('open', 'closed')
 SORTS = ('age', 'type', 'id', 'title', 'repo')
 DESC_FIRST = ('age', 'id')
 FIELDS = 'repository,number,title,labels,updatedAt,createdAt,commentsCount,url,state,isPullRequest,author'
@@ -399,12 +399,12 @@ def item_row(it):
 
 
 def rows(st):
-    at, its = items(st['states'] != 'open')
-    out = commit_rows(st, its) if st['kind'] in ('all', 'commit') and st['states'] != 'closed' else []
+    at, its = items(st['states'] == 'closed')
+    out = commit_rows(st, its) if st['kind'] in ('all', 'commit') and st['states'] == 'open' else []
     if st['kind'] != 'commit':
         out += [item_row(i) for i in its
                 if (st['repo'] == 'all' or i['repo'] == st['repo'])
-                and (st['states'] == 'both' or (i['state'] == 'open') == (st['states'] == 'open'))
+                and (i['state'] == 'open') == (st['states'] == 'open')
                 and (st['kind'] == 'all' or (st['kind'] == 'pr') == i['pr'])]
     keys = {'age': lambda r: r['updated'], 'type': lambda r: (r['type'], -r['updated']),
             'id': lambda r: (r['repo'], r['num']), 'title': lambda r: r['title'].lower(),
